@@ -59,7 +59,7 @@ ensure_php_cli() {
   local ver
   ver="$(php -r 'echo PHP_MAJOR_VERSION.".".PHP_MINOR_VERSION;')"
   if [[ "${ver}" != "8.3" && "${ver}" != "8.4" ]]; then
-    warn "Ожидался PHP 8.3+, сейчас ${ver}"
+    warn "Ожидался PHP 8.4+, сейчас ${ver}"
   else
     ok "PHP ${ver}"
   fi
@@ -117,7 +117,7 @@ artisan_optimize() {
 }
 
 reload_services() {
-  systemctl reload php8.3-fpm 2>/dev/null || systemctl reload php*-fpm 2>/dev/null || true
+  systemctl reload php8.4-fpm 2>/dev/null || systemctl reload php8.3-fpm 2>/dev/null || systemctl reload php*-fpm 2>/dev/null || true
   systemctl reload nginx 2>/dev/null || true
   if command -v supervisorctl >/dev/null 2>&1; then
     supervisorctl reread >/dev/null 2>&1 || true

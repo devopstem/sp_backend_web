@@ -2,7 +2,7 @@
 
 ## Требования
 
-- PHP 8.3+ с расширениями Laravel (pgsql/sqlite, redis, mbstring, openssl, …)
+- PHP 8.4+ с расширениями Laravel (pgsql/sqlite, redis, mbstring, openssl, …)
 - Composer 2
 - Node.js 20+ / npm
 - PostgreSQL 16 (рекомендуется) или SQLite для быстрого старта

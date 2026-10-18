@@ -20,7 +20,7 @@ source "${SCRIPT_DIR}/lib.sh"
 DOMAIN="${DOMAIN:-}"
 APP_DIR="${APP_DIR:-${SP_ROOT}}"
 WEB_USER="${WEB_USER:-www-data}"
-PHP_VERSION="${PHP_VERSION:-8.3}"
+PHP_VERSION="${PHP_VERSION:-8.4}"
 NODE_MAJOR="${NODE_MAJOR:-20}"
 WITH_SSL="${WITH_SSL:-0}"
 WITH_SEED="${WITH_SEED:-0}"
@@ -46,7 +46,7 @@ Env / flags:
   DB_USER         пользователь БД (default: sp_app)
   DB_PASSWORD     пароль БД (если пусто — сгенерируется)
   WEB_USER        пользователь PHP-FPM (default: www-data)
-  PHP_VERSION     8.3 (default)
+  PHP_VERSION     8.4 (default)
 EOF
 }
 
