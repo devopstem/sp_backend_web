@@ -27,7 +27,7 @@ sudo ./scripts/deploy.sh
 
 Опции: `./scripts/install.sh --help`, `./scripts/deploy.sh --help`.
 
-Скрипты ставят Nginx, PHP 8.3, PostgreSQL, Redis, Supervisor (queue + reverb), cron `schedule:run`.  
+Скрипты ставят Nginx, PHP 8.4, PostgreSQL, Redis, Supervisor (queue + reverb), cron `schedule:run`.  
 **Не** кладут Firebase JSON и не заменяют ручную проверку `.env`/DNS.
 
 ---
@@ -125,7 +125,7 @@ server {
 
     location ~ \.php$ {
         include fastcgi_params;
-        fastcgi_pass unix:/run/php/php8.3-fpm.sock;
+        fastcgi_pass unix:/run/php/php8.4-fpm.sock;
         fastcgi_param SCRIPT_FILENAME $realpath_root$fastcgi_script_name;
     }
 
