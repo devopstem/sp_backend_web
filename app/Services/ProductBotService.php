@@ -421,6 +421,8 @@ final class ProductBotService
 
         $haystack = mb_strtolower(trim(($name ?? '').' '.($category ?? '')));
 
+        $fallback = null;
+
         foreach ($rules as $rule) {
             if ($volumeMl !== null) {
                 if ($rule->volume_ml_min !== null && $volumeMl < $rule->volume_ml_min) {
@@ -433,22 +435,29 @@ final class ProductBotService
                 continue;
             }
 
+            $rulePackage = ProductPackageTypes::normalize($rule->package_type) ?? $rule->package_type;
+
+            // Already know packaging (from OFF / product) — never apply another type's dims.
+            if ($packageType && $rulePackage && $packageType !== $rulePackage) {
+                continue;
+            }
+
             if ($rule->keyword) {
                 $keyword = mb_strtolower(trim($rule->keyword));
                 if ($keyword === '' || ! str_contains($haystack, $keyword)) {
                     continue;
                 }
+
+                return $rule;
             }
 
-            if ($packageType && $rule->package_type && $packageType !== $rule->package_type && $rule->keyword === null) {
-                // volume-only rule for a specific package: skip if package already differs
-                continue;
+            // Generic (no keyword): keep first by priority, return after brand scan.
+            if ($fallback === null && $packageType && $rulePackage === $packageType) {
+                $fallback = $rule;
             }
-
-            return $rule;
         }
 
-        return null;
+        return $fallback;
     }
 
     private function guessPackageTypeFromContext(?string $name, ?string $category, int $volumeMl): ?string

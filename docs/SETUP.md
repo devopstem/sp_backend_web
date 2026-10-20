@@ -107,8 +107,9 @@ chmod -R ug+rwx storage bootstrap/cache
 ## Проверка
 
 1. Логин Super Admin
-2. Создать tenant / магазин (по сценарию сидера)
-3. Настройки → Интеграции (если нужен Firebase)
-4. Экспорт → тест выгрузки
+2. Создать tenant / магазин в UI
+3. Товары → Product Bot (габариты) при необходимости
+4. Настройки → Интеграции (если нужен Firebase)
+5. Экспорт → тест выгрузки
 
 Дальше: [DEPLOYMENT.md](DEPLOYMENT.md), [FIREBASE.md](FIREBASE.md).

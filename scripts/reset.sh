@@ -34,8 +34,8 @@ Env:
 После сброса вручную:
   1. Войти как Super Admin (SUPER_ADMIN_EMAIL / SUPER_ADMIN_PASSWORD из .env)
   2. Создать арендатора и магазин в UI
-  3. Демо-каталог: ./scripts/seed-store-catalog.sh
-  4. Очистить Firebase Console (Realtime Database) вручную
+  3. Товары / Product Bot → Scan
+  4. Очистить Firebase Console (Realtime Database) вручную при необходимости
 EOF
 }
 
@@ -85,10 +85,8 @@ cat <<'EOF'
 
 Дальше:
   1. Открой сайт → войди как Super Admin
-  2. Создай арендатора и магазин
-  3. Демо (карта + 77 отделов + оборудование):
-       STORE_CATALOG_STORE=<uuid> sudo ./scripts/seed-store-catalog.sh
-  4. Firebase Console → Realtime Database → очисти данные вручную
-  5. После настройки — экспорт каталога из UI
+  2. Создай арендатора и магазин в UI
+  3. Загрузи товары → Product Bot (/product-bot) → Scan → принять
+  4. При необходимости: Firebase Console → очисти RTDB вручную → экспорт из UI
 
 EOF
