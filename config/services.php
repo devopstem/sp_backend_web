@@ -47,4 +47,26 @@ return [
         'password' => env('SUPER_ADMIN_PASSWORD'),
     ],
 
+    /*
+    | Open Food Facts (product bot + barcode lookup). No API key required.
+    | RU host first for better CIS barcode coverage; world is the fallback.
+    */
+    'openfoodfacts' => [
+        'hosts' => array_values(array_filter(array_map(
+            'trim',
+            explode(',', (string) env(
+                'OFF_HOSTS',
+                'https://ru.openfoodfacts.org,https://world.openfoodfacts.org',
+            )),
+        ))),
+        'cache_ttl' => (int) env('OFF_CACHE_TTL', 86400),
+        'miss_cache_ttl' => (int) env('OFF_MISS_CACHE_TTL', 3600),
+        'min_interval_ms' => (int) env('OFF_MIN_INTERVAL_MS', 250),
+        'timeout' => (int) env('OFF_TIMEOUT', 8),
+        'user_agent' => env(
+            'OFF_USER_AGENT',
+            'SmartPlanogramControlCenter/2.4 (product-bot; https://github.com/devopstem/sp_backend_web)',
+        ),
+    ],
+
 ];

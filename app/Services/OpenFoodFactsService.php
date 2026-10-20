@@ -5,15 +5,19 @@ declare(strict_types=1);
 namespace App\Services;
 
 use App\Support\ProductPackageTypes;
+use Illuminate\Http\Client\PendingRequest;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Throwable;
 
 final class OpenFoodFactsService
 {
-    private const PRODUCT_ENDPOINT = 'https://world.openfoodfacts.org/api/v2/product/%s.json';
+    private const PRODUCT_PATH = '/api/v2/product/%s.json';
 
-    private const SEARCH_ENDPOINT = 'https://world.openfoodfacts.org/cgi/search.pl';
+    private const SEARCH_PATH = '/cgi/search.pl';
+
+    private const PRODUCT_FIELDS = 'code,product_name,product_name_ru,product_name_en,generic_name,brands,categories,categories_ru,categories_tags,quantity,product_quantity,product_quantity_unit,packaging,packaging_tags,packaging_text,image_front_small_url,image_small_url,image_url';
 
     /**
      * @return array{
@@ -40,36 +44,60 @@ final class OpenFoodFactsService
             return $empty;
         }
 
-        try {
-            $response = $this->http()
-                ->get(sprintf(self::PRODUCT_ENDPOINT, $barcode));
+        $cacheKey = 'off:v2:barcode:'.$barcode;
+        $cached = Cache::get($cacheKey);
+        if (is_array($cached)) {
+            unset($cached['_miss']);
 
-            if (! $response->successful()) {
-                return $empty;
+            return array_merge($empty, $cached);
+        }
+
+        $this->throttle();
+        $mapped = null;
+
+        foreach ($this->hosts() as $host) {
+            try {
+                $response = $this->http()
+                    ->get($host.sprintf(self::PRODUCT_PATH, $barcode), [
+                        'fields' => self::PRODUCT_FIELDS,
+                    ]);
+
+                if (! $response->successful()) {
+                    continue;
+                }
+
+                $payload = $response->json();
+                if (! is_array($payload) || (int) ($payload['status'] ?? 0) !== 1) {
+                    continue;
+                }
+
+                $product = $payload['product'] ?? null;
+                if (! is_array($product)) {
+                    continue;
+                }
+
+                $mapped = $this->mapProduct($product, $barcode);
+                $mapped['match_by'] = 'barcode';
+                $mapped['source_url'] = rtrim($host, '/').'/product/'.$barcode;
+                break;
+            } catch (Throwable $exception) {
+                Log::warning('Open Food Facts lookup failed', [
+                    'host' => $host,
+                    'barcode' => $barcode,
+                    'message' => $exception->getMessage(),
+                ]);
             }
+        }
 
-            $payload = $response->json();
-            if (! is_array($payload) || (int) ($payload['status'] ?? 0) !== 1) {
-                return $empty;
-            }
-
-            $product = $payload['product'] ?? null;
-            if (! is_array($product)) {
-                return $empty;
-            }
-
-            $mapped = $this->mapProduct($product, $barcode);
-            $mapped['match_by'] = 'barcode';
-
-            return $mapped;
-        } catch (Throwable $exception) {
-            Log::warning('Open Food Facts lookup failed', [
-                'barcode' => $barcode,
-                'message' => $exception->getMessage(),
-            ]);
+        if ($mapped === null) {
+            Cache::put($cacheKey, $empty + ['_miss' => true], $this->missCacheTtl());
 
             return $empty;
         }
+
+        Cache::put($cacheKey, $mapped, $this->cacheTtl());
+
+        return array_merge($empty, $mapped);
     }
 
     /**
@@ -99,61 +127,85 @@ final class OpenFoodFactsService
             return $empty;
         }
 
-        try {
-            $response = $this->http()
-                ->get(self::SEARCH_ENDPOINT, [
-                    'search_terms' => $query,
-                    'search_simple' => 1,
-                    'action' => 'process',
-                    'json' => 1,
-                    'page_size' => 8,
-                    'fields' => 'code,product_name,product_name_ru,product_name_en,generic_name,brands,categories,categories_ru,categories_tags,quantity,product_quantity,packaging,packaging_tags,image_front_small_url,image_small_url,image_url',
-                ]);
+        $cacheKey = 'off:v2:name:'.hash('sha256', mb_strtolower($query).'|'.($preferVolumeMl ?? ''));
+        $cached = Cache::get($cacheKey);
+        if (is_array($cached)) {
+            unset($cached['_miss']);
 
-            if (! $response->successful()) {
-                return $empty;
-            }
+            return array_merge($empty, $cached);
+        }
 
-            $payload = $response->json();
-            $products = is_array($payload) ? ($payload['products'] ?? []) : [];
-            if (! is_array($products) || $products === []) {
-                return $empty;
-            }
+        $this->throttle();
+        $mapped = null;
 
-            $best = null;
-            $bestScore = -1.0;
+        foreach ($this->hosts() as $host) {
+            try {
+                $response = $this->http()
+                    ->get($host.self::SEARCH_PATH, [
+                        'search_terms' => $query,
+                        'search_simple' => 1,
+                        'action' => 'process',
+                        'json' => 1,
+                        'page_size' => 10,
+                        'fields' => self::PRODUCT_FIELDS,
+                    ]);
 
-            foreach ($products as $product) {
-                if (! is_array($product)) {
+                if (! $response->successful()) {
                     continue;
                 }
 
-                $score = $this->scoreNameMatch($query, $product, $preferVolumeMl);
-                if ($score > $bestScore) {
-                    $bestScore = $score;
-                    $best = $product;
+                $payload = $response->json();
+                $products = is_array($payload) ? ($payload['products'] ?? []) : [];
+                if (! is_array($products) || $products === []) {
+                    continue;
                 }
+
+                $best = null;
+                $bestScore = -1.0;
+
+                foreach ($products as $product) {
+                    if (! is_array($product)) {
+                        continue;
+                    }
+
+                    $score = $this->scoreNameMatch($query, $product, $preferVolumeMl);
+                    if ($score > $bestScore) {
+                        $bestScore = $score;
+                        $best = $product;
+                    }
+                }
+
+                if ($best === null || $bestScore < 0.35) {
+                    continue;
+                }
+
+                $code = preg_replace('/\D+/', '', (string) ($best['code'] ?? '')) ?? '';
+                $mapped = $this->mapProduct($best, $code);
+                $mapped['match_by'] = 'name';
+                $mapped['found'] = $mapped['found']
+                    || ($mapped['package_type'] !== null || $mapped['volume_ml'] !== null);
+                if ($code !== '') {
+                    $mapped['source_url'] = rtrim($host, '/').'/product/'.$code;
+                }
+                break;
+            } catch (Throwable $exception) {
+                Log::warning('Open Food Facts name search failed', [
+                    'host' => $host,
+                    'query' => $query,
+                    'message' => $exception->getMessage(),
+                ]);
             }
+        }
 
-            // Require a reasonable name similarity to avoid junk matches.
-            if ($best === null || $bestScore < 0.35) {
-                return $empty;
-            }
-
-            $code = preg_replace('/\D+/', '', (string) ($best['code'] ?? '')) ?? '';
-            $mapped = $this->mapProduct($best, $code);
-            $mapped['match_by'] = 'name';
-            $mapped['found'] = $mapped['found'] || ($mapped['package_type'] !== null || $mapped['volume_ml'] !== null);
-
-            return $mapped;
-        } catch (Throwable $exception) {
-            Log::warning('Open Food Facts name search failed', [
-                'query' => $query,
-                'message' => $exception->getMessage(),
-            ]);
+        if ($mapped === null) {
+            Cache::put($cacheKey, $empty + ['_miss' => true], $this->missCacheTtl());
 
             return $empty;
         }
+
+        Cache::put($cacheKey, $mapped, $this->cacheTtl());
+
+        return array_merge($empty, $mapped);
     }
 
     /**
@@ -196,7 +248,6 @@ final class OpenFoodFactsService
             return $byName;
         }
 
-        // Merge: keep barcode hit, fill missing fields from name search.
         foreach (['name', 'category', 'brand', 'quantity', 'volume_ml', 'weight_g', 'package_type', 'image_url', 'source_url'] as $field) {
             if (empty($byBarcode[$field]) && ! empty($byName[$field])) {
                 $byBarcode[$field] = $byName[$field];
@@ -242,13 +293,75 @@ final class OpenFoodFactsService
         ];
     }
 
-    private function http()
+    private function http(): PendingRequest
     {
         return Http::acceptJson()
-            ->timeout(8)
+            ->timeout($this->timeout())
             ->withHeaders([
-                'User-Agent' => 'SmartPlanogramControlCenter/1.0 (product-bot; contact=admin@localhost)',
+                'User-Agent' => $this->userAgent(),
             ]);
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function hosts(): array
+    {
+        $configured = config('services.openfoodfacts.hosts');
+        if (is_array($configured) && $configured !== []) {
+            return array_values(array_filter(array_map(
+                static fn ($host): string => rtrim((string) $host, '/'),
+                $configured,
+            )));
+        }
+
+        // RU first — better CIS coverage for BY/RU retail barcodes.
+        return [
+            'https://ru.openfoodfacts.org',
+            'https://world.openfoodfacts.org',
+        ];
+    }
+
+    private function cacheTtl(): int
+    {
+        return max(300, (int) config('services.openfoodfacts.cache_ttl', 86400));
+    }
+
+    private function missCacheTtl(): int
+    {
+        return max(60, (int) config('services.openfoodfacts.miss_cache_ttl', 3600));
+    }
+
+    private function timeout(): int
+    {
+        return max(3, (int) config('services.openfoodfacts.timeout', 8));
+    }
+
+    private function userAgent(): string
+    {
+        return (string) config(
+            'services.openfoodfacts.user_agent',
+            'SmartPlanogramControlCenter/2.4 (product-bot; https://github.com/devopstem/sp_backend_web)',
+        );
+    }
+
+    private function throttle(): void
+    {
+        $minGapMs = max(0, (int) config('services.openfoodfacts.min_interval_ms', 250));
+        if ($minGapMs === 0) {
+            return;
+        }
+
+        $key = 'off:throttle:last';
+        $last = Cache::get($key);
+        if (is_numeric($last)) {
+            $elapsedMs = (microtime(true) - (float) $last) * 1000;
+            if ($elapsedMs < $minGapMs) {
+                usleep((int) (($minGapMs - $elapsedMs) * 1000));
+            }
+        }
+
+        Cache::put($key, microtime(true), 60);
     }
 
     /**
@@ -288,26 +401,22 @@ final class OpenFoodFactsService
         $category = $this->resolveCategory($product);
         $quantity = $this->firstNonEmpty([
             $product['quantity'] ?? null,
-            $product['product_quantity'] ?? null,
+            $product['packaging_text'] ?? null,
         ]);
 
-        [$volumeMl, $weightG] = $this->parseQuantity(is_string($quantity) || is_numeric($quantity) ? (string) $quantity : null);
+        [$volumeMl, $weightG] = $this->resolveQuantity($product, $quantity);
+        $packageType = $this->resolvePackageType($product);
 
         return [
-            'found' => $name !== null && $name !== '',
+            'found' => ($name !== null && $name !== '') || $volumeMl !== null || $packageType !== null,
             'barcode' => $barcode,
             'name' => $name,
             'category' => $category,
             'brand' => $brand,
-            'quantity' => $quantity,
+            'quantity' => is_string($quantity) ? $quantity : (is_numeric($quantity) ? (string) $quantity : null),
             'volume_ml' => $volumeMl,
             'weight_g' => $weightG,
-            'package_type' => ProductPackageTypes::normalize($this->firstNonEmpty([
-                $product['packaging'] ?? null,
-                is_array($product['packaging_tags'] ?? null)
-                    ? ($product['packaging_tags'][0] ?? null)
-                    : null,
-            ])),
+            'package_type' => $packageType,
             'image_url' => $this->firstNonEmpty([
                 $product['image_front_small_url'] ?? null,
                 $product['image_small_url'] ?? null,
@@ -318,6 +427,80 @@ final class OpenFoodFactsService
                 : null,
             'match_by' => null,
         ];
+    }
+
+    /**
+     * @param  array<string, mixed>  $product
+     */
+    private function resolvePackageType(array $product): ?string
+    {
+        $candidates = [];
+
+        if (is_array($product['packaging_tags'] ?? null)) {
+            foreach ($product['packaging_tags'] as $tag) {
+                if (is_string($tag) || is_numeric($tag)) {
+                    $candidates[] = (string) $tag;
+                }
+            }
+        }
+
+        if (is_string($product['packaging'] ?? null) || is_numeric($product['packaging'] ?? null)) {
+            $candidates[] = (string) $product['packaging'];
+        }
+
+        if (is_string($product['packaging_text'] ?? null)) {
+            $candidates[] = $product['packaging_text'];
+        }
+
+        foreach ($candidates as $candidate) {
+            $normalized = ProductPackageTypes::normalize($candidate);
+            if ($normalized !== null && $normalized !== ProductPackageTypes::OTHER) {
+                return $normalized;
+            }
+        }
+
+        foreach ($candidates as $candidate) {
+            $normalized = ProductPackageTypes::normalize($candidate);
+            if ($normalized !== null) {
+                return $normalized;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * @param  array<string, mixed>  $product
+     * @return array{0: int|null, 1: int|null}
+     */
+    private function resolveQuantity(array $product, ?string $quantityText): array
+    {
+        [$fromTextMl, $fromTextG] = $this->parseQuantity($quantityText);
+        if ($fromTextMl !== null || $fromTextG !== null) {
+            return [$fromTextMl, $fromTextG];
+        }
+
+        $rawQty = $product['product_quantity'] ?? null;
+        $unit = mb_strtolower(trim((string) ($product['product_quantity_unit'] ?? '')));
+
+        if (! is_numeric($rawQty)) {
+            return [null, null];
+        }
+
+        $value = (float) $rawQty;
+        if ($value <= 0) {
+            return [null, null];
+        }
+
+        return match (true) {
+            $unit === '' && $value >= 50 && $value <= 5000 => [(int) round($value), null], // bare ml-ish
+            in_array($unit, ['ml', 'мл', 'milliliter', 'millilitre'], true) => [(int) round($value), null],
+            in_array($unit, ['l', 'л', 'litre', 'liter'], true) => [(int) round($value * 1000), null],
+            in_array($unit, ['cl', 'сл'], true) => [(int) round($value * 10), null],
+            in_array($unit, ['g', 'гр', 'г', 'gram', 'grams'], true) => [null, (int) round($value)],
+            in_array($unit, ['kg', 'кг'], true) => [null, (int) round($value * 1000)],
+            default => [null, null],
+        };
     }
 
     /**
@@ -344,7 +527,6 @@ final class OpenFoodFactsService
             $score = max($score, 0.72);
         }
 
-        // Boost shared significant tokens (brand / product words).
         $queryTokens = $this->tokens($needle);
         $candTokens = $this->tokens($candidate);
         if ($queryTokens !== [] && $candTokens !== []) {
@@ -353,11 +535,10 @@ final class OpenFoodFactsService
         }
 
         if ($preferVolumeMl !== null) {
-            $quantity = $this->firstNonEmpty([
+            [$volumeMl] = $this->resolveQuantity($product, $this->firstNonEmpty([
                 $product['quantity'] ?? null,
-                $product['product_quantity'] ?? null,
-            ]);
-            [$volumeMl] = $this->parseQuantity($quantity);
+                $product['packaging_text'] ?? null,
+            ]));
             if ($volumeMl !== null && abs($volumeMl - $preferVolumeMl) <= 50) {
                 $score += 0.15;
             }
@@ -433,6 +614,12 @@ final class OpenFoodFactsService
 
         if (preg_match('/(\d+(?:[.,]\d+)?)\s*m(?:l|л)\b/ui', $quantity, $match)) {
             $ml = (int) round((float) str_replace(',', '.', $match[1]));
+
+            return [$ml > 0 ? $ml : null, null];
+        }
+
+        if (preg_match('/(\d+(?:[.,]\d+)?)\s*c(?:l|л)\b/ui', $quantity, $match)) {
+            $ml = (int) round(((float) str_replace(',', '.', $match[1])) * 10);
 
             return [$ml > 0 ? $ml : null, null];
         }

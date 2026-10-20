@@ -1,6 +1,6 @@
 # Сидеры (database/seeders)
 
-Краткая шпаргалка: что есть, когда запускать, что нужно заранее.
+Краткая шпаргалка: что есть и когда запускать.
 
 ## Автоматически при установке
 
@@ -12,90 +12,48 @@ php artisan db:seed --force
 | Сидер | Что делает | Нужно в .env |
 |-------|------------|--------------|
 | **RoleSeeder** | Роли и права Spatie (Super Admin, Заместитель, …) | — |
-| **SuperAdminSeeder** | Пользователь Super Admin | `SUPER_ADMIN_EMAIL`, `SUPER_ADMIN_PASSWORD` (см. `config/services.php`) |
-| **PlanSeeder** | Тарифы Free/Basic/Pro/Enterprise, банковский счёт, подписки для существующих арендаторов | — |
+| **SuperAdminSeeder** | Пользователь Super Admin | `SUPER_ADMIN_EMAIL`, `SUPER_ADMIN_PASSWORD` |
+| **PlanSeeder** | Тарифы Free/Basic/Pro/Enterprise, банковский счёт, подписки | — |
 | **LegalDocumentSeeder** | Оферта и политика конфиденциальности (если ещё нет) | — |
-| **BotTrainingSeeder** | Правила обогащения товаров для Product Bot (~напитки BY/RU) | — |
+| **BotTrainingSeeder** | Правила габаритов для Product Bot (бренды + общие типы упаковки) | — |
 
-**Не создаёт:** магазины, отделы, карту зала, демо-оборудование.
+**Не создаёт:** магазины, отделы, карту зала, демо-оборудование — это делается в UI.
 
 ---
 
-## Демо-магазин (вручную, после создания Tenant + Store)
+## Только правила бота (повторно)
+
+После правок `BotTrainingSeeder` или на уже живой БД:
 
 ```bash
-php artisan db:seed --class=StoreCatalogSeeder --force
+php artisan db:seed --class=BotTrainingSeeder --force
 ```
 
-Один сидер делает всё:
+Идемпотентно (`updateOrCreate` по keyword + package + volume range).
 
-1. Карта зала 30×25 м (стены, вход, 8 касс) — `FloorPlanService::setupHall`
-2. **77 отделов** — `DepartmentsCatalogSeeder`
-3. **Оборудование на карте** (координаты pos_x/pos_y) — `StoreEquipmentSeeder`
-   - 10 стеллажей (WC, KW, SN)
-   - 3 холодильника (DF, IC)
-   - 3 стойки
+Что внутри:
 
-Конкретный магазин:
+1. **Брендовые / категорийные** правила (пиво, кола, pepsi, вода, сок, молоко, …) — высокий приоритет.
+2. **Общие** правила без keyword (Банка/ПЭТ/Бутылка/Коробка/Пакет × объём) — срабатывают, когда OFF уже дал тип упаковки и объём, но бренд в названии не распознан.
 
-```bash
-STORE_CATALOG_STORE=<uuid-магазина> php artisan db:seed --class=StoreCatalogSeeder --force
-```
-
-Без переменной — **первый** магазин в БД.
-
-### По частям
-
-| Команда | Только |
-|---------|--------|
-| `DepartmentsCatalogSeeder` | 77 отделов |
-| `StoreEquipmentSeeder` | Стеллажи/холодильники/стойки (нужны отделы WC, KW, SN, DF, IC) |
-| `FloorPlanDemoSeeder` | Алиас → `StoreCatalogSeeder` (старые скрипты) |
-
-Повторный запуск безопасен (`updateOrCreate`).
+Габариты в мм нужны планограмме; Open Food Facts почти никогда не отдаёт точный диаметр.
 
 ---
 
 ## Порядок для чистого VPS
 
 ```bash
-# 1. Обновить код + сбросить БД
 CONFIRM=1 sudo ./scripts/reset.sh
+# → migrate:fresh --seed (роли, админ, тарифы, legal, bot training)
 
-# 2. В UI: арендатор → магазин
-
-# 3. Демо-каталог
-STORE_CATALOG_STORE=<uuid> sudo ./scripts/seed-store-catalog.sh
-
-# 4. Firebase Console → очистить Realtime Database вручную
+# В UI: арендатор → магазин → товары
+# Product Bot: /product-bot → Scan → принять предложения
 ```
-
-Или вручную:
-
-1. `php artisan migrate:fresh --seed --force` — роли, админ, тарифы
-2. В UI: **Арендатор** → **Магазин**
-3. `php artisan db:seed --class=StoreCatalogSeeder --force`
-4. При необходимости: очистить Firebase вручную, затем экспорт из UI
-
----
-
-## Не в DatabaseSeeder (осознанно)
-
-| Сидер | Почему отдельно |
-|-------|-----------------|
-| StoreCatalogSeeder | Демо-данные магазина, не для продакшена |
-| DepartmentsCatalogSeeder | Часть StoreCatalogSeeder |
-| StoreEquipmentSeeder | Часть StoreCatalogSeeder |
-| FloorPlanDemoSeeder | Устаревший алиас |
 
 ---
 
 ## Проверка синтаксиса
 
 ```bash
-for f in database/seeders/*.php database/seeders/Concerns/*.php; do php -l "$f"; done
+for f in database/seeders/*.php; do php -l "$f"; done
 ```
-
-## Удаление демо-данных
-
-Сидеры не удаляют — только создают/обновляют. Личные данные убирайте в UI или через `migrate:fresh` на тестовом стенде.

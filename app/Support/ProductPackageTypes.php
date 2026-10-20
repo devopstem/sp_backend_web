@@ -51,7 +51,7 @@ final class ProductPackageTypes
         $value = str_replace(['en:', 'ru:', 'fr:', 'de:', '-'], ['', '', '', '', ' '], $value);
         $value = preg_replace('/\s+/u', ' ', $value) ?? $value;
 
-        if ($value === '') {
+        if ($value === '' || str_contains($value, 'unknown')) {
             return null;
         }
 
@@ -65,38 +65,63 @@ final class ProductPackageTypes
             }
         }
 
+        // Longer / specific phrases first so "plastic bottle" ≠ generic "plastic".
         $map = [
-            'bottle' => self::BOTTLE,
             'glass bottle' => self::BOTTLE,
             'plastic bottle' => self::BOTTLE,
-            'бутылка' => self::BOTTLE,
+            'aluminium can' => self::CAN,
+            'aluminum can' => self::CAN,
+            'metal can' => self::CAN,
+            'drink can' => self::CAN,
+            'жестяная банка' => self::CAN,
+            'алюминиевая банка' => self::CAN,
             'стеклянная бутылка' => self::BOTTLE,
+            'пластиковая бутылка' => self::PET,
+            'pet bottle' => self::PET,
+            'plastic bag' => self::BAG,
+            'tetra pak' => self::BOX,
+            'tetrapak' => self::BOX,
+            'тетра пак' => self::BOX,
+            'тетрапак' => self::BOX,
+            'пакет асептический' => self::BOX,
+            'bottle' => self::BOTTLE,
+            'бутылка' => self::BOTTLE,
+            'стекло' => self::BOTTLE,
+            'glass' => self::BOTTLE,
             'can' => self::CAN,
             'tin' => self::CAN,
             'банка' => self::CAN,
-            'жестяная банка' => self::CAN,
             'pet' => self::PET,
             'пэт' => self::PET,
             'пластик' => self::PET,
-            'bag' => self::BAG,
+            'plastic' => self::PET,
             'sachet' => self::BAG,
-            'пакет' => self::BAG,
+            'pouch' => self::BAG,
             'пакетик' => self::BAG,
-            'box' => self::BOX,
+            'дойпак' => self::BAG,
+            'пакет' => self::BAG,
+            'bag' => self::BAG,
             'carton' => self::BOX,
-            'тетрапак' => self::BOX,
+            'cardboard' => self::BOX,
+            'brick' => self::BOX,
             'коробка' => self::BOX,
-            'pack' => self::OTHER,
-            'other' => self::OTHER,
+            'box' => self::BOX,
             'другое' => self::OTHER,
+            'other' => self::OTHER,
         ];
 
         if (isset($map[$value])) {
             return $map[$value];
         }
 
+        // Word-boundary match — avoids "packaging" → "pack" false positive.
         foreach ($map as $needle => $label) {
-            if (str_contains($value, $needle)) {
+            if ($needle === 'other' || $needle === 'другое') {
+                continue;
+            }
+
+            $pattern = '/(?:^|[^\p{L}\p{N}])'.preg_quote($needle, '/').'(?:$|[^\p{L}\p{N}])/u';
+            if (preg_match($pattern, ' '.$value.' ')) {
                 return $label;
             }
         }
