@@ -157,6 +157,7 @@ final class ProductBotService
         }
 
         $rule = $this->matchTrainingRule($name, $category, $volumeMl, $packageType);
+        $dimsFromTraining = false;
         if ($rule) {
             $source = $source === 'openfoodfacts' ? 'off+training' : 'training';
             $confidence += 30;
@@ -168,12 +169,20 @@ final class ProductBotService
 
             if (! $width && $rule->width_mm) {
                 $width = $rule->width_mm;
+                $dimsFromTraining = true;
             }
             if (! $height && $rule->height_mm) {
                 $height = $rule->height_mm;
+                $dimsFromTraining = true;
             }
             if (! $depth && $rule->depth_mm) {
                 $depth = $rule->depth_mm;
+                $dimsFromTraining = true;
+            }
+
+            if ($dimsFromTraining) {
+                $confidence += 20;
+                $reasons[] = 'Габариты из правила обучения (предпочтительнее оценки)';
             }
         }
 
@@ -187,7 +196,7 @@ final class ProductBotService
         }
 
         if ((! $width || ! $height || ! $depth) && $packageType && $volumeMl) {
-            [$estW, $estH, $estD] = $this->estimateDimensions($packageType, $volumeMl);
+            [$estW, $estH, $estD, $exactVolume] = $this->estimateDimensions($packageType, $volumeMl);
             if ($estW && ! $width) {
                 $width = $estW;
             }
@@ -198,8 +207,10 @@ final class ProductBotService
                 $depth = $estD;
             }
             if ($estW || $estH || $estD) {
-                $confidence += 15;
-                $reasons[] = 'Габариты оценены по объёму и типу упаковки';
+                $confidence += $exactVolume ? 22 : 12;
+                $reasons[] = $exactVolume
+                    ? 'Габариты по типовой таблице для '.$volumeMl.' мл / '.$packageType
+                    : 'Габариты оценены по ближайшему объёму и типу упаковки';
             }
         }
 
@@ -471,39 +482,55 @@ final class ProductBotService
     }
 
     /**
-     * @return array{0: int|null, 1: int|null, 2: int|null}
+     * @return array{0: int|null, 1: int|null, 2: int|null, 3: bool}
+     *         width, height, depth, exactVolumeMatch
      */
     private function estimateDimensions(string $packageType, int $volumeMl): array
     {
+        // Typical retail shelf footprints (W×H×D mm) for CIS beverages / dairy.
         $table = match ($packageType) {
             ProductPackageTypes::CAN => [
+                [250, 53, 134, 53],
                 [330, 66, 115, 66],
+                [450, 66, 155, 66],
                 [500, 66, 168, 66],
+                [568, 73, 168, 73],
                 [750, 73, 190, 73],
+                [1000, 84, 175, 84],
             ],
             ProductPackageTypes::BOTTLE => [
+                [250, 55, 180, 55],
                 [330, 60, 200, 60],
+                [450, 65, 220, 65],
                 [500, 70, 230, 70],
                 [750, 75, 280, 75],
                 [1000, 80, 300, 80],
             ],
             ProductPackageTypes::PET => [
+                [250, 55, 180, 55],
+                [330, 60, 195, 60],
                 [500, 65, 220, 65],
+                [750, 72, 250, 72],
                 [1000, 80, 280, 80],
                 [1500, 90, 320, 90],
                 [2000, 100, 340, 100],
             ],
             ProductPackageTypes::BOX => [
                 [200, 50, 110, 40],
+                [250, 52, 120, 42],
                 [500, 60, 150, 50],
+                [750, 65, 175, 60],
                 [1000, 70, 200, 70],
             ],
             ProductPackageTypes::BAG => [
                 [100, 80, 120, 30],
+                [200, 90, 140, 35],
                 [250, 100, 160, 40],
                 [500, 120, 200, 50],
+                [1000, 140, 250, 60],
             ],
             default => [
+                [330, 66, 115, 66],
                 [500, 70, 200, 70],
             ],
         };
@@ -518,7 +545,9 @@ final class ProductBotService
             }
         }
 
-        return [$best[1], $best[2], $best[3]];
+        $exact = $bestDiff <= 20;
+
+        return [$best[1], $best[2], $best[3], $exact];
     }
 
     /**
